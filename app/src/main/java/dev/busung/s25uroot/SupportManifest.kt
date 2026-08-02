@@ -18,12 +18,19 @@ data class TargetProfile(
     val kernelModule: RemoteArtifact,
 ) {
     init {
-        require(models.isNotEmpty()) { "Payload must support at least one model" }
-        require(kernelVersions.isNotEmpty()) { "Payload must support at least one kernel version" }
+        require(models.isNotEmpty()) {
+            "Payload must support at least one model"
+        }
+
+        require(kernelVersions.isNotEmpty()) {
+            "Payload must support at least one kernel version"
+        }
     }
 
     fun matchesDevice(snapshot: DeviceSnapshot): Boolean =
-        models.any { it.equals(snapshot.model, ignoreCase = true) }
+        models.any { model ->
+            model.equals(snapshot.model, ignoreCase = true)
+        }
 
     fun matchesKernelVersion(snapshot: DeviceSnapshot): Boolean =
         snapshot.kernelVersion in kernelVersions
@@ -46,19 +53,31 @@ data class SupportManifest(
         fun parse(bytes: ByteArray): SupportManifest {
             val root = JSONObject(bytes.toString(Charsets.UTF_8))
             val schemaVersion = root.getInt("schemaVersion")
-            require(schemaVersion == 3) { "Unsupported support manifest schema" }
+
+            require(schemaVersion == 3) {
+                "Unsupported support manifest schema"
+            }
+
             val payloadsJson = root.getJSONArray("payloads")
+
             val payloads = buildList {
                 for (index in 0 until payloadsJson.length()) {
                     val payload = payloadsJson.getJSONObject(index)
+
                     val exploit = payload.getJSONObject("exploit")
                     val kernelSu = payload.getJSONObject("kernelsu")
+                    val kernelModule = payload.getJSONObject("kernelModule")
+
                     add(
                         TargetProfile(
                             profileId = payload.getString("payloadId"),
                             displayName = payload.getString("displayName"),
-                            models = payload.getJSONArray("models").strings(),
-                            kernelVersions = payload.getJSONArray("kernelVersions").strings(),
+                            models = payload
+                                .getJSONArray("models")
+                                .strings(),
+                            kernelVersions = payload
+                                .getJSONArray("kernelVersions")
+                                .strings(),
                             exploit = RemoteArtifact(
                                 url = exploit.getString("url"),
                                 size = exploit.getLong("size"),
@@ -67,15 +86,25 @@ data class SupportManifest(
                                 url = kernelSu.getString("url"),
                                 size = kernelSu.getLong("size"),
                             ),
+                            kernelModule = RemoteArtifact(
+                                url = kernelModule.getString("url"),
+                                size = kernelModule.getLong("size"),
+                            ),
                         ),
                     )
                 }
             }
-            return SupportManifest(schemaVersion, payloads)
+
+            return SupportManifest(
+                schemaVersion = schemaVersion,
+                targets = payloads,
+            )
         }
 
         private fun JSONArray.strings(): Set<String> = buildSet {
-            for (index in 0 until length()) add(getString(index))
+            for (index in 0 until length()) {
+                add(getString(index))
+            }
         }
     }
 }
