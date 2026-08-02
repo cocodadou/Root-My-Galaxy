@@ -25,7 +25,6 @@ jobs:
   build:
     name: Build debug APK
     runs-on: ubuntu-latest
-
     timeout-minutes: 30
 
     steps:
@@ -41,16 +40,23 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
         with:
+          cmdline-tools-version: "14742923"
           packages: ""
 
       - name: Install Android build dependencies
         shell: bash
         run: |
-          sdkmanager --install \
+          sdkmanager --channel=3 --install \
             "platform-tools" \
             "platforms;android-37" \
+            "build-tools;37.0.0" \
             "cmake;3.22.1" \
             "ndk;28.2.13676358"
+
+      - name: Display installed SDK packages
+        shell: bash
+        run: |
+          sdkmanager --list_installed
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
@@ -67,7 +73,7 @@ jobs:
           APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
 
           if [[ ! -f "$APK_PATH" ]]; then
-            echo "APK not found at: $APK_PATH"
+            echo "::error::APK not found at $APK_PATH"
             find app/build/outputs -type f 2>/dev/null || true
             exit 1
           fi
