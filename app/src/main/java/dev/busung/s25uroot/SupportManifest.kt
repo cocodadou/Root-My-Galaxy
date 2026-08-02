@@ -15,6 +15,7 @@ data class TargetProfile(
     val kernelVersions: Set<String>,
     val exploit: RemoteArtifact,
     val kernelSu: RemoteArtifact,
+    val kernelModule: RemoteArtifact,
 ) {
     init {
         require(models.isNotEmpty()) { "Payload must support at least one model" }
