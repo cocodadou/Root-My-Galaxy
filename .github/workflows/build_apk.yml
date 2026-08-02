@@ -1,89 +1,187 @@
-name: Build Android APK
+name: Build Root My Galaxy APK
 
 on:
   workflow_dispatch:
 
-  push:
-    branches:
-      - main
-    paths-ignore:
-      - "**/*.md"
-      - "LICENSE"
-
-  pull_request:
-    branches:
-      - main
-
 permissions:
   contents: read
 
-concurrency:
-  group: android-build-${{ github.ref }}
-  cancel-in-progress: true
+env:
+  NDK_VERSION: 29.0.14206865
 
 jobs:
   build:
     name: Build debug APK
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
+      - name: Récupérer le dépôt
+        uses: actions/checkout@v4
 
-      - name: Set up Java 21
-        uses: actions/setup-java@v5
+      - name: Configurer Java 21
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "21"
 
-      - name: Set up Android SDK
+      - name: Configurer Android SDK
         uses: android-actions/setup-android@v4
         with:
           cmdline-tools-version: "14742923"
           packages: ""
+          accept-android-sdk-licenses: "true"
+          log-accepted-android-sdk-licenses: "false"
 
-      - name: Install Android build dependencies
+      - name: Détecter et installer Android API 37
         shell: bash
         run: |
+          set -euo pipefail
+
+          sdkmanager --list --channel=3 > /tmp/sdk-packages.txt
+
+          PLATFORM_PACKAGE="$(
+            python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          content = Path("/tmp/sdk-packages.txt").read_text(
+              encoding="utf-8",
+              errors="replace",
+          )
+
+          packages = []
+
+          for line in content.splitlines():
+              package = line.split("|", 1)[0].strip()
+
+              if re.fullmatch(
+                  r"platforms;android-37(?:\.[A-Za-z0-9.-]+)?",
+                  package,
+              ):
+                  packages.append(package)
+
+          preferences = [
+              "platforms;android-37",
+              "platforms;android-37.0",
+              "platforms;android-37.1",
+          ]
+
+          selected = next(
+              (package for package in preferences if package in packages),
+              packages[0] if packages else None,
+          )
+
+          if selected is None:
+              raise SystemExit(
+                  "Aucun package Android API 37 n'est disponible."
+              )
+
+          print(selected)
+          PY
+          )"
+
+          echo "Package Android sélectionné : ${PLATFORM_PACKAGE}"
+
           sdkmanager --channel=3 --install \
             "platform-tools" \
-            "platforms;android-37" \
-            "build-tools;37.0.0" \
-            "cmake;3.22.1" \
-            "ndk;28.2.13676358"
+            "${PLATFORM_PACKAGE}" \
+            "build-tools;36.1.0" \
+            "ndk;${NDK_VERSION}" \
+            "cmake;3.22.1"
 
-      - name: Display installed SDK packages
+          PLATFORM_NAME="${PLATFORM_PACKAGE#platforms;}"
+          PLATFORM_DIRECTORY="${ANDROID_SDK_ROOT}/platforms/${PLATFORM_NAME}"
+          STANDARD_PLATFORM="${ANDROID_SDK_ROOT}/platforms/android-37"
+          NDK_HOME="${ANDROID_SDK_ROOT}/ndk/${NDK_VERSION}"
+
+          test -f "${PLATFORM_DIRECTORY}/android.jar"
+          test -d "${ANDROID_SDK_ROOT}/cmake/3.22.1"
+          test -x "${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/clang"
+
+          if [[ "${PLATFORM_DIRECTORY}" != "${STANDARD_PLATFORM}" ]]; then
+            rm -rf "${STANDARD_PLATFORM}"
+            ln -s "${PLATFORM_NAME}" "${STANDARD_PLATFORM}"
+          fi
+
+          test -f "${STANDARD_PLATFORM}/android.jar"
+
+          echo "ANDROID_PLATFORM_PACKAGE=${PLATFORM_PACKAGE}" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=${NDK_HOME}" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=${NDK_HOME}" >> "$GITHUB_ENV"
+          echo "${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin" >> "$GITHUB_PATH"
+
+      - name: Vérifier que les sources sont intactes
         shell: bash
         run: |
-          sdkmanager --list_installed
+          set -euo pipefail
 
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v6
+          test -f "${ANDROID_SDK_ROOT}/platforms/android-37/android.jar"
+          test -d "${ANDROID_SDK_ROOT}/cmake/3.22.1"
+          test -x "${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/clang"
 
-      - name: Make Gradle wrapper executable
-        run: chmod +x gradlew
-
-      - name: Build debug APK
-        run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
-
-      - name: Verify APK output
-        shell: bash
-        run: |
-          APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
-
-          if [[ ! -f "$APK_PATH" ]]; then
-            echo "::error::APK not found at $APK_PATH"
-            find app/build/outputs -type f 2>/dev/null || true
+          if [[ -n "$(git status --porcelain)" ]]; then
+            echo "::error::Le workflow a modifié les fichiers du dépôt."
+            git status --short
+            git diff
             exit 1
           fi
 
-          ls -lh "$APK_PATH"
+          echo "Plateforme : ${ANDROID_PLATFORM_PACKAGE}"
+          echo "NDK : ${NDK_VERSION}"
+          echo "Aucun fichier source ni aucune URL du projet n'a été modifié."
 
-      - name: Upload debug APK
+      - name: Configurer Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Rendre le wrapper Gradle exécutable
+        run: chmod +x gradlew
+
+      - name: Afficher les versions
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          java -version
+          ./gradlew --version
+          "${ANDROID_SDK_ROOT}/cmake/3.22.1/bin/cmake" --version
+          "${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/clang" \
+            --version | head -1
+
+      - name: Compiler l’APK debug
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ./gradlew \
+            :app:assembleDebug \
+            --no-daemon \
+            --stacktrace
+
+      - name: Préparer l’APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          OUTPUT="output/Root-My-Galaxy-debug.apk"
+
+          if [[ ! -s "${APK}" ]]; then
+            echo "::error::APK introuvable : ${APK}"
+            find app/build/outputs -type f -name "*.apk" -print || true
+            exit 1
+          fi
+
+          mkdir -p output
+          cp "${APK}" "${OUTPUT}"
+
+          stat -c "%n : %s bytes" "${OUTPUT}"
+          sha256sum "${OUTPUT}"
+
+      - name: Publier l’APK
         uses: actions/upload-artifact@v4
         with:
-          name: Root-My-Galaxy-debug-${{ github.sha }}
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: Root-My-Galaxy-debug
+          path: output/Root-My-Galaxy-debug.apk
           if-no-files-found: error
           retention-days: 14
